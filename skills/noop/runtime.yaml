@@ -1,0 +1,9 @@
+name: noop
+version: 0.1.0
+enabled: true            # M0 only — disable when funding-arb lands
+poll_interval: 10s
+timeout_ratio: 0.8
+budget: 0
+slots: 0
+margin_per_slot: 0
+env: []

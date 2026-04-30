@@ -1,0 +1,11 @@
+name: funding-arb
+version: 0.1.0
+enabled: false           # flip to true and disable noop when ready
+poll_interval: 10s
+timeout_ratio: 0.8
+budget: 50               # USD notional cap for this skill's open exposure (sized for ~$250 wallet)
+slots: 1
+margin_per_slot: 20      # USD margin per slot
+env:
+  - STRATEGY_API_BASE
+  - STRATEGY_API_KEY

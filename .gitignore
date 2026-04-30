@@ -1,0 +1,18 @@
+node_modules/
+dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+__pycache__/
+*.pyc
+.DS_Store
+.tsbuildinfo
+
+# Local relayer-cli binary; platform-specific, installed via install.sh in Docker
+bin/
+
+# Don't commit relayerprogram.json — copy from upstream at deploy time
+relayerprogram.json

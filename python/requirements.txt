@@ -1,0 +1,2 @@
+# Python skills are stdlib-only by design (Senpi parity, plan §4.2).
+# This file exists so the Docker build can run `pip install -r` without erroring.
