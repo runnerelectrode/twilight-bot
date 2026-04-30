@@ -16,3 +16,6 @@ bin/
 
 # Don't commit relayerprogram.json — copy from upstream at deploy time
 relayerprogram.json
+
+# Local backups of remote services (e.g. strategy-api tarballs); keep off GitHub
+.backups/
