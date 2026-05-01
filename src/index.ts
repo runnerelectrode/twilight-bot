@@ -101,10 +101,13 @@ async function main(): Promise<void> {
     }
     return cachedMid;
   };
-  const cexBalances = async (): Promise<{ binance: number; bybit: number }> => ({
-    binance: await binance.fetchBalanceUsd().catch(() => 0),
-    bybit:   await bybit.fetchBalanceUsd().catch(() => 0),
-  });
+  const cexBalances = async (): Promise<{ binance: number; bybit: number }> => {
+    const mid = await midPrice();
+    return {
+      binance: await binance.fetchBalanceUsd(mid).catch(() => 0),
+      bybit:   await bybit.fetchBalanceUsd(mid).catch(() => 0),
+    };
+  };
 
   const guards = new Guards(db, {
     paper: env.paper,

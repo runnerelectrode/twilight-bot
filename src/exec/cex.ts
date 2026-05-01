@@ -88,11 +88,16 @@ export class CexExec {
     return this.client.fetchPositions();
   }
 
-  async fetchBalanceUsd(): Promise<number> {
+  async fetchBalanceUsd(midPriceUsd?: number): Promise<number> {
     if (this.env.paper) return 1000;
     if (!this.env.apiKey || !this.env.apiSecret) return 0;
     const bal = await this.client.fetchBalance();
     const totals = (bal.total ?? {}) as unknown as Record<string, number>;
-    return Number(totals["USDT"] ?? totals["USD"] ?? 0);
+    // Linear/USDT-margined: balance is in USDT.
+    // Inverse-margined (Bybit BTCUSD): balance is in BTC; convert via mid price.
+    const usdt = Number(totals["USDT"] ?? totals["USD"] ?? 0);
+    const btc  = Number(totals["BTC"] ?? 0);
+    const btcInUsd = btc > 0 && midPriceUsd && midPriceUsd > 0 ? btc * midPriceUsd : 0;
+    return usdt + btcInUsd;
   }
 }
