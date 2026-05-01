@@ -1,6 +1,6 @@
 name: noop
 version: 0.1.0
-enabled: true            # M0 only — disable when funding-arb lands
+enabled: false            # M0 only — disable when funding-arb lands
 poll_interval: 10s
 timeout_ratio: 0.8
 budget: 0

@@ -63,6 +63,58 @@ export class CexExec {
     };
   }
 
+  /** Attach a hard SL order at the venue. Closes the position when mark price hits stop_price.
+   *  Returns ok:false on failure but does NOT throw — caller decides whether to unwind. */
+  async attachStop(leg: CexLeg, entry_price: number, stop_loss_pct: number): Promise<{ ok: boolean; stop_price: number; raw?: unknown; error?: string }> {
+    if (this.env.paper) {
+      return { ok: true, stop_price: leg.side === "long" ? entry_price * (1 - stop_loss_pct) : entry_price * (1 + stop_loss_pct), raw: { paper: true } };
+    }
+    if (!this.env.apiKey || !this.env.apiSecret) {
+      return { ok: false, stop_price: 0, error: "api keys not set" };
+    }
+    const stop_price = leg.side === "long"
+      ? entry_price * (1 - stop_loss_pct)
+      : entry_price * (1 + stop_loss_pct);
+    const ccxtSide = leg.side === "long" ? "sell" : "buy"; // close direction
+    try {
+      let order: unknown;
+      const amount = leg.contract_type === "inverse"
+        ? Math.max(1, Math.round(leg.size_usd))
+        : leg.size_usd / entry_price;
+      // ccxt's OrderType union doesn't include venue-specific stop types like
+      // STOP_MARKET (Binance) — we cast to bypass the union since the runtime
+      // accepts these via the venue-extended createOrder.
+      type OT = "market" | "limit" | "STOP_MARKET";
+      if (this.venue === "binance") {
+        order = await this.client.createOrder(
+          leg.symbol, "STOP_MARKET" as OT, ccxtSide, amount, undefined,
+          {
+            stopPrice: this.client.priceToPrecision(leg.symbol, stop_price),
+            closePosition: true,
+            workingType: "MARK_PRICE",
+            reduceOnly: true,
+          },
+        );
+      } else {
+        // Bybit: stop-loss order with triggerPrice + triggerDirection
+        // triggerDirection: 1 = price moves UP through trigger, 2 = price moves DOWN through trigger
+        const triggerDirection = leg.side === "long" ? 2 : 1;
+        order = await this.client.createOrder(
+          leg.symbol, "market" as OT, ccxtSide, amount, undefined,
+          {
+            triggerPrice: this.client.priceToPrecision(leg.symbol, stop_price),
+            triggerDirection,
+            reduceOnly: true,
+            orderFilter: "StopOrder",
+          },
+        );
+      }
+      return { ok: true, stop_price, raw: order };
+    } catch (e) {
+      return { ok: false, stop_price, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   async closeReduceOnly(symbol: string, side: "long" | "short", contract_type: "linear" | "inverse", size_usd: number, mid_price: number): Promise<FillResult> {
     if (this.env.paper) {
       return { venue: this.venue, side, size: size_usd, price: mid_price, fee: 0, raw: { paper: true, close: true } };

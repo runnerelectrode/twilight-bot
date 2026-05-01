@@ -7,21 +7,27 @@ from typing import Any
 
 
 def leg_twilight(side: str, size_sats: int, leverage: int,
-                 order_type: str = "MARKET", max_slippage_bps: int = 50) -> dict[str, Any]:
-    return {
+                 order_type: str = "MARKET", max_slippage_bps: int = 50,
+                 account_index: int = 0, stop_loss_pct: float | None = 0.10) -> dict[str, Any]:
+    leg = {
         "venue": "twilight",
         "side": side,
         "size_sats": size_sats,
         "leverage": leverage,
         "order_type": order_type,
         "max_slippage_bps": max_slippage_bps,
+        "account_index": account_index,
     }
+    if stop_loss_pct is not None and stop_loss_pct > 0:
+        leg["stop_loss_pct"] = stop_loss_pct
+    return leg
 
 
 def leg_binance(side: str, size_usd: float, leverage: int,
                 order_type: str = "MARKET",
-                post_only: bool = False, reduce_only: bool = False) -> dict[str, Any]:
-    return {
+                post_only: bool = False, reduce_only: bool = False,
+                stop_loss_pct: float | None = 0.10) -> dict[str, Any]:
+    leg = {
         "venue": "binance",
         "symbol": "BTCUSDT",
         "contract_type": "linear",
@@ -32,12 +38,16 @@ def leg_binance(side: str, size_usd: float, leverage: int,
         "post_only": post_only,
         "reduce_only": reduce_only,
     }
+    if stop_loss_pct is not None and stop_loss_pct > 0:
+        leg["stop_loss_pct"] = stop_loss_pct
+    return leg
 
 
 def leg_bybit(side: str, size_usd: float, leverage: int,
               order_type: str = "MARKET",
-              post_only: bool = False, reduce_only: bool = False) -> dict[str, Any]:
-    return {
+              post_only: bool = False, reduce_only: bool = False,
+              stop_loss_pct: float | None = 0.10) -> dict[str, Any]:
+    leg = {
         "venue": "bybit",
         "symbol": "BTCUSD",
         "contract_type": "inverse",
@@ -48,6 +58,9 @@ def leg_bybit(side: str, size_usd: float, leverage: int,
         "post_only": post_only,
         "reduce_only": reduce_only,
     }
+    if stop_loss_pct is not None and stop_loss_pct > 0:
+        leg["stop_loss_pct"] = stop_loss_pct
+    return leg
 
 
 def build_intent(skill: str, tick_id: str, thesis: str,
