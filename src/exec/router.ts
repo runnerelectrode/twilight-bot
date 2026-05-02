@@ -42,7 +42,7 @@ export class ExecRouter {
       try {
         const fill = await this.openLeg(leg, mid);
         fills.push(fill);
-        this.persistFill(intent.intent_id, fill);
+        this.persistFill(intent.intent_id, fill, leg, true);
         // Attach venue-side hard stop if requested. Failure is non-fatal —
         // the DSL layer remains as a fallback. We log loudly so it's visible.
         if (leg.stop_loss_pct && leg.stop_loss_pct > 0) {
@@ -88,7 +88,7 @@ export class ExecRouter {
       try {
         const f = await this.closeLeg(leg, mid, account_index);
         out.push(f);
-        this.persistFill(intent.intent_id, f);
+        this.persistFill(intent.intent_id, f, leg, false);
       } catch (e) {
         log.error("exec.close_failed", { intent_id: intent.intent_id, venue: leg.venue, err: String(e) });
       }
@@ -128,13 +128,30 @@ export class ExecRouter {
     return out;
   }
 
-  private persistFill(intent_id: string, f: FillResult): void {
+  /** On open: write fill + insert position row.
+   *  On close: write fill + mark matching position closed (with realized PnL if known). */
+  private persistFill(intent_id: string, f: FillResult, leg: Leg | null, isOpen: boolean): void {
+    const now = Date.now();
     this.deps.db.prepare(
       `INSERT INTO fills(fill_id, intent_id, venue, side, size, price, fee, raw_json, ts)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       randomUUID(), intent_id, f.venue, f.side, f.size, f.price, f.fee,
-      JSON.stringify(f.raw), Date.now(),
+      JSON.stringify(f.raw), now,
     );
+    if (isOpen && leg) {
+      // Persist the open position so the DSL exit engine has something to evaluate.
+      this.deps.db.prepare(
+        `INSERT INTO positions(position_id, intent_id, venue, side, size, entry_price, leverage, opened_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        randomUUID(), intent_id, f.venue, f.side, f.size, f.price, leg.leverage, now,
+      );
+    } else {
+      // Mark the open position closed. Best-effort match by intent_id + venue.
+      this.deps.db.prepare(
+        `UPDATE positions SET closed_at = ? WHERE intent_id = ? AND venue = ? AND closed_at IS NULL`
+      ).run(now, intent_id, f.venue);
+    }
   }
 }

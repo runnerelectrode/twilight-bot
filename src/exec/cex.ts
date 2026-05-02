@@ -137,7 +137,10 @@ export class CexExec {
   async fetchPositions(): Promise<unknown[]> {
     if (this.env.paper) return [];
     if (!this.env.apiKey || !this.env.apiSecret) return [];
-    return this.client.fetchPositions();
+    // Bybit inverse requires an explicit symbol filter; without one, fetchPositions
+    // returns empty even with open positions. Pass the symbols we trade on.
+    const symbols = this.venue === "bybit" ? ["BTC/USD:BTC"] : ["BTC/USDT:USDT"];
+    return this.client.fetchPositions(symbols);
   }
 
   async fetchBalanceUsd(midPriceUsd?: number): Promise<number> {

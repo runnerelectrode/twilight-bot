@@ -43,19 +43,28 @@ export class PositionTracker {
 
   private normalizeTwilight(raw: unknown): ReconciledPosition[] {
     if (!raw || typeof raw !== "object") return [];
-    const r = raw as { positions?: unknown[]; trades?: unknown[] };
-    const list = (r.positions ?? r.trades ?? []) as Array<Record<string, unknown>>;
-    return list.map((p, i) => ({
-      id: `twi_${(p["account_index"] ?? i)}`,
-      venue: "twilight" as const,
-      side: ((p["side"] as string)?.toLowerCase() === "short" ? "short" : "long") as "long" | "short",
-      size: Number(p["size_sats"] ?? p["size"] ?? 0),
-      entry_price: Number(p["entry_price"] ?? 0),
-      mark_price: Number(p["mark_price"] ?? p["entry_price"] ?? 0),
-      leverage: Number(p["leverage"] ?? 1),
-      unrealized_pnl: Number(p["unrealized_pnl"] ?? 0),
-      raw: p,
-    }));
+    // relayer-cli portfolio summary returns `trader_positions` (not `positions` or `trades`).
+    const r = raw as { trader_positions?: unknown[]; positions?: unknown[]; trades?: unknown[] };
+    const list = (r.trader_positions ?? r.positions ?? r.trades ?? []) as Array<Record<string, unknown>>;
+    return list.map((p, i) => {
+      // Twilight relayer uses `position_type` ("LONG"/"SHORT"), not `side`.
+      const sideRaw = String(p["position_type"] ?? p["side"] ?? "").toUpperCase();
+      const side: "long" | "short" = sideRaw === "SHORT" ? "short" : "long";
+      // `position_size` is the leveraged notional in sats (e.g. 8003430000 for
+      // ~80 USD). `initial_margin` is the un-leveraged margin in sats.
+      const positionSize = Number(p["position_size"] ?? p["size_sats"] ?? p["size"] ?? 0);
+      return {
+        id: `twi_${(p["account_index"] ?? i)}`,
+        venue: "twilight" as const,
+        side,
+        size: positionSize,
+        entry_price: Number(p["entry_price"] ?? 0),
+        mark_price: Number(p["current_price"] ?? p["mark_price"] ?? p["entry_price"] ?? 0),
+        leverage: Number(p["leverage"] ?? 1),
+        unrealized_pnl: Number(p["unrealized_pnl"] ?? 0),
+        raw: p,
+      };
+    });
   }
 
   private normalizeCex(venue: "binance" | "bybit", raw: unknown[]): ReconciledPosition[] {

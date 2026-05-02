@@ -15,6 +15,7 @@ import { startApi } from "./api/server.js";
 import type { IntentLike } from "./exec/types.js";
 import { PositionTracker } from "./feeds/positionTracker.js";
 import { evaluate, type ExitRule, type DslMetrics } from "./dsl/engine.js";
+import { ImpactChecker } from "./safety/impactCheck.js";
 
 interface BootEnv {
   paper: boolean;
@@ -122,6 +123,7 @@ async function main(): Promise<void> {
 
   const exec = new ExecRouter({ db, twilight, binance, bybit, midPrice });
   const positionTracker = new PositionTracker(twilight, binance, bybit);
+  const impactChecker = new ImpactChecker(env.strategyApiBase, env.strategyApiKey);
 
   const fetchPositions = async (): Promise<unknown[]> => positionTracker.all();
 
@@ -144,11 +146,21 @@ async function main(): Promise<void> {
       ).all(i.intent_id) as { entry_price: number; size: number; venue: string; side: string }[];
       if (positions.length === 0) continue;
       const time_in_position_hours = (Date.now() - i.opened_at) / 3_600_000;
-      const totalEntry = positions.reduce((a, p) => a + p.entry_price * p.size, 0);
-      const totalSize  = positions.reduce((a, p) => a + p.size, 0);
-      const avgEntry   = totalSize > 0 ? totalEntry / totalSize : 0;
       const mid = await midPrice();
-      const unrealized_pct = avgEntry > 0 ? (mid - avgEntry) / avgEntry : 0;
+      // Side-aware unrealized PnL: long earns when mark > entry; short earns
+      // when mark < entry. Blend across positions weighted by size so a
+      // delta-neutral pair correctly reads as ~0% unrealized.
+      let weightedPctSum = 0;
+      let totalSize = 0;
+      for (const p of positions) {
+        if (p.entry_price <= 0 || p.size <= 0) continue;
+        const sidePct = p.side === "short"
+          ? (p.entry_price - mid) / p.entry_price
+          : (mid - p.entry_price) / p.entry_price;
+        weightedPctSum += sidePct * p.size;
+        totalSize += p.size;
+      }
+      const unrealized_pct = totalSize > 0 ? weightedPctSum / totalSize : 0;
       const metrics: DslMetrics = {
         pnl: { unrealized_pct },
         funding_rates: {
@@ -234,6 +246,13 @@ async function main(): Promise<void> {
       log.warn("intent.rejected", { intent_id: intent.intent_id, reason: decision.reason });
       return { intent_id: intent.intent_id, status: "rejected" };
     }
+    // Pre-trade impact check: would this trade tip funding against us?
+    const impact = await impactChecker.check(intent, mid);
+    if (!impact.ok) {
+      updateIntentStatus(db, intent.intent_id, "rejected", impact.reason);
+      log.warn("intent.rejected", { intent_id: intent.intent_id, reason: impact.reason, layer: "impact" });
+      return { intent_id: intent.intent_id, status: "rejected" };
+    }
     updateIntentStatus(db, intent.intent_id, "approved");
     const result = await exec.fanOut(intent);
     updateIntentStatus(db, intent.intent_id, result.status);
@@ -249,7 +268,7 @@ async function main(): Promise<void> {
   const scheduler = new Scheduler({ db, host, strategyApi, fetchPositions, fetchWallet: async () => ({}), onIntent });
 
   startApi({
-    db, strategyApi, guards, exec,
+    db, strategyApi, guards, exec, impactChecker,
     fetchPositions, midPrice, cexBalances,
     bootEnv: { paper: env.paper, liveConfirmed: env.liveConfirmed, dataDir: env.dataDir },
     bindPublic: env.bindPublic,

@@ -8,12 +8,14 @@ import type { StrategyApi } from "../feeds/strategyApi.js";
 import type { Guards } from "../safety/guards.js";
 import type { ExecRouter } from "../exec/router.js";
 import type { IntentLike } from "../exec/types.js";
+import type { ImpactChecker } from "../safety/impactCheck.js";
 import { randomUUID } from "node:crypto";
 
 export interface ApiDeps {
   db: DB;
   strategyApi: StrategyApi;
   guards: Guards;
+  impactChecker: ImpactChecker;
   exec: ExecRouter;
   fetchPositions(): Promise<unknown[]>;
   midPrice(): Promise<number>;
@@ -169,6 +171,12 @@ async function route(
       midPrice: mid, binanceBalanceUsd: balances.binance, bybitBalanceUsd: balances.bybit,
     }, { live, confirmLive: body.confirm_live });
     if (!decision.ok) return send(res, 400, { error: "rejected", reason: decision.reason });
+    // Pre-trade impact check: would this tip Twilight funding against us?
+    // Skipped for paper mode so dry-runs aren't gated on the chain pool state.
+    if (live) {
+      const impact = await d.impactChecker.check(intent, mid);
+      if (!impact.ok) return send(res, 400, { error: "rejected", reason: impact.reason, layer: "impact", details: impact.details });
+    }
 
     d.db.prepare(
       `INSERT INTO intents(intent_id, skill, ts, thesis, legs_json, exit_json, status)
