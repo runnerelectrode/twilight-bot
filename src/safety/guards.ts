@@ -93,6 +93,20 @@ export class Guards {
       }
     }
 
+    // Per-skill cooldown: block re-entry within N minutes of any prior intent
+    // for this skill (open or closed). Senpi-inspired (Scorpion v4.1
+    // per_asset_cooldown_minutes: 120). Default 120 min via runtime.yaml.
+    if (this.skill.cooldown_minutes > 0) {
+      const since = Date.now() - this.skill.cooldown_minutes * 60_000;
+      const recent = this.db.prepare(
+        `SELECT MAX(ts) AS ts FROM intents WHERE skill = ? AND status IN ('approved','filled','closed') AND ts >= ?`
+      ).get(this.skill.name, since) as { ts: number | null };
+      if (recent.ts) {
+        const minsSince = Math.round((Date.now() - recent.ts) / 60_000);
+        return { ok: false, reason: `cooldown_${this.skill.cooldown_minutes}min_active_last_intent_${minsSince}min_ago` };
+      }
+    }
+
     return { ok: true };
   }
 

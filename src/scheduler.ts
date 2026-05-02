@@ -85,6 +85,18 @@ export class Scheduler {
     });
     const wallet = await this.deps.fetchWallet().catch(() => ({}));
 
+    // Senpi-pattern: skip the python skill entirely if a position is already
+    // open. Scanners should never re-evaluate exits (DSL owns that), so
+    // calling them when positions exist is wasted IPC + risk of bad re-entry.
+    if (this.deps.host.skill.skip_when_position_open && Array.isArray(positions) && positions.length > 0) {
+      const skip_id = this.makeId();
+      insertTick(this.deps.db, { tick_id: skip_id, skill, started_at: ts });
+      finishTick(this.deps.db, skip_id, {
+        status: "skip_position_open", finished_at: Date.now(), latency_ms: 0,
+      });
+      return;
+    }
+
     const tickPayload: Omit<TickPayload, "type" | "tick_id"> = { ts, market, strategies, positions, wallet };
     const tick_id = this.makeId();
     insertTick(this.deps.db, { tick_id, skill, started_at: ts });

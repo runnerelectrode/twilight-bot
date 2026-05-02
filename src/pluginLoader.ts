@@ -14,6 +14,8 @@ export interface SkillConfig {
   env: string[];
   dir: string;
   scanner_path: string;
+  cooldown_minutes: number;
+  skip_when_position_open: boolean;
 }
 
 interface RawRuntimeYaml {
@@ -26,6 +28,8 @@ interface RawRuntimeYaml {
   slots?: number;
   margin_per_slot?: number;
   env?: string[];
+  cooldown_minutes?: number;
+  skip_when_position_open?: boolean;
 }
 
 function parseInterval(value: string | number | undefined): number {
@@ -69,6 +73,8 @@ export function loadSkills(skillsRoot: string): SkillConfig[] {
       env: raw.env ?? [],
       dir,
       scanner_path: scannerPath,
+      cooldown_minutes: raw.cooldown_minutes ?? 120,         // Senpi default
+      skip_when_position_open: raw.skip_when_position_open !== false,  // default true
     });
   }
   return out;

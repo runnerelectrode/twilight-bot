@@ -1,4 +1,4 @@
-import ccxt, { type Exchange } from "ccxt";
+import ccxt, { type Exchange, type Order } from "ccxt";
 import { log } from "../log.js";
 import type { CexLeg, FillResult } from "./types.js";
 
@@ -131,6 +131,85 @@ export class CexExec {
       size: contract_type === "inverse" ? filled : filled * avg,
       price: avg, fee: Number((order.fee as { cost?: number } | undefined)?.cost ?? 0),
       raw: order,
+    };
+  }
+
+  /** Senpi-inspired FEE_OPTIMIZED_LIMIT close: maker-first limit slightly
+   *  inside the spread, poll up to 60s, cancel + market-fallback if unfilled.
+   *  Saves ~0.05% × notional × 2 round-trip on Bybit/Binance vs taker-always.
+   *  Use for take-profit / time-stop closes where speed isn't critical;
+   *  stays on closeReduceOnly for stop-loss closes where speed > fee.
+   */
+  async closeOptimized(symbol: string, side: "long" | "short", contract_type: "linear" | "inverse", size_usd: number, mid_price: number): Promise<FillResult> {
+    if (this.env.paper) {
+      return { venue: this.venue, side, size: size_usd, price: mid_price, fee: 0, raw: { paper: true, close: true, mode: "optimized" } };
+    }
+    const ccxtSide = side === "long" ? "sell" : "buy";
+    const amount = contract_type === "inverse"
+      ? Math.max(1, Math.round(size_usd))
+      : size_usd / mid_price;
+
+    // Place limit ~5 bps inside the spread on the side that closes us:
+    //   closing a long → sell at mid + 5bps (maker on the ask)
+    //   closing a short → buy at mid - 5bps (maker on the bid)
+    const offsetBps = 5;
+    const limitPrice = side === "long"
+      ? mid_price * (1 + offsetBps / 10000)
+      : mid_price * (1 - offsetBps / 10000);
+    const priceStr = this.client.priceToPrecision(symbol, limitPrice);
+
+    let limitOrder: Order;
+    try {
+      limitOrder = await this.client.createOrder(
+        symbol, "limit", ccxtSide, amount, Number(priceStr),
+        { reduceOnly: true, postOnly: true },
+      );
+    } catch (e) {
+      // Maker-only rejection or other err — fall straight to market.
+      log.warn("cex.closeOptimized.limit_reject_market_fallback", { venue: this.venue, err: String(e) });
+      return this.closeReduceOnly(symbol, side, contract_type, size_usd, mid_price);
+    }
+
+    // Poll up to 60s for the limit to fill.
+    const deadline = Date.now() + 60_000;
+    let last: Order = limitOrder;
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 3_000));
+      try {
+        last = await this.client.fetchOrder(limitOrder.id, symbol);
+      } catch (e) {
+        log.warn("cex.closeOptimized.fetchOrder_err", { venue: this.venue, err: String(e) });
+      }
+      if (last.status === "closed" || Number(last.filled) >= amount) break;
+    }
+
+    if (last.status !== "closed") {
+      // Cancel, market-fallback for the unfilled remainder.
+      try { await this.client.cancelOrder(limitOrder.id, symbol); } catch (e) {
+        log.warn("cex.closeOptimized.cancel_err", { venue: this.venue, err: String(e) });
+      }
+      const partFilled = Number(last.filled ?? 0);
+      const remaining = Math.max(amount - partFilled, contract_type === "inverse" ? 1 : amount * 0.001);
+      log.info("cex.closeOptimized.market_fallback", { venue: this.venue, filled: partFilled, remaining });
+      const market = await this.client.createOrder(symbol, "market", ccxtSide, remaining, undefined, { reduceOnly: true });
+      // Combine fills for accounting (best-effort; only the market leg's avg is honest)
+      const filled = Number(market.filled ?? remaining) + partFilled;
+      const avg = Number(market.average ?? market.price ?? mid_price);
+      return {
+        venue: this.venue, side,
+        size: contract_type === "inverse" ? filled : filled * avg,
+        price: avg, fee: Number((market.fee as { cost?: number } | undefined)?.cost ?? 0),
+        raw: { mode: "optimized_market_fallback", limit: last, market },
+      };
+    }
+
+    const filled = Number(last.filled ?? amount);
+    const avg = Number(last.average ?? last.price ?? Number(priceStr));
+    return {
+      venue: this.venue, side,
+      size: contract_type === "inverse" ? filled : filled * avg,
+      price: avg, fee: Number((last.fee as { cost?: number } | undefined)?.cost ?? 0),
+      raw: { mode: "optimized_filled", order: last },
     };
   }
 

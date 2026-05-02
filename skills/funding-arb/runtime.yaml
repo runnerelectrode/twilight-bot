@@ -6,6 +6,8 @@ timeout_ratio: 0.8
 budget: 200              # USD notional cap for this skill's open exposure
 slots: 1
 margin_per_slot: 100     # USD margin per slot
+cooldown_minutes: 120    # min gap between intents (Senpi-inspired)
+skip_when_position_open: true  # don't even call the scanner if a position is open
 env:
   - STRATEGY_API_BASE
   - STRATEGY_API_KEY

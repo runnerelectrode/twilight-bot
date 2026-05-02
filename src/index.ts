@@ -14,7 +14,7 @@ import { Guards } from "./safety/guards.js";
 import { startApi } from "./api/server.js";
 import type { IntentLike } from "./exec/types.js";
 import { PositionTracker } from "./feeds/positionTracker.js";
-import { evaluate, type ExitRule, type DslMetrics } from "./dsl/engine.js";
+import { evaluate, lockedFloorForHwm, type ExitRule, type DslMetrics } from "./dsl/engine.js";
 import { ImpactChecker } from "./safety/impactCheck.js";
 import { ClaudeConsult } from "./safety/claudeConsult.js";
 
@@ -163,8 +163,18 @@ async function main(): Promise<void> {
         totalSize += p.size;
       }
       const unrealized_pct = totalSize > 0 ? weightedPctSum / totalSize : 0;
+      // Phase-2 ratchet: track high-water mark per intent, derive locked floor.
+      const hwmRow = db.prepare(`SELECT high_water_pct FROM intent_hwm WHERE intent_id = ?`).get(i.intent_id) as { high_water_pct?: number } | undefined;
+      const prevHwm = Number(hwmRow?.high_water_pct ?? 0);
+      const high_water_pct = Math.max(prevHwm, unrealized_pct);
+      if (high_water_pct > prevHwm) {
+        db.prepare(`INSERT INTO intent_hwm(intent_id, high_water_pct, updated_at) VALUES (?, ?, ?)
+                    ON CONFLICT(intent_id) DO UPDATE SET high_water_pct = excluded.high_water_pct, updated_at = excluded.updated_at`)
+          .run(i.intent_id, high_water_pct, Date.now());
+      }
+      const locked_floor_pct = lockedFloorForHwm(high_water_pct);
       const metrics: DslMetrics = {
-        pnl: { unrealized_pct },
+        pnl: { unrealized_pct, high_water_pct, locked_floor_pct },
         funding_rates: {
           twilight: { rate: market.fundingRates.twilight.rate },
           binance:  { rate: market.fundingRates.binance.rate },
@@ -260,7 +270,9 @@ async function main(): Promise<void> {
       const market = await strategyApi.market().catch(() => ({}));
       const c = await consult.ask({
         intent, midPrice: mid, impact: impact.details ?? null,
-        market, recentDecisions: consult.recent(5),
+        market,
+        recentDecisions: consult.recent(5),
+        recentTrades: consult.recentTrades(10),
       });
       if (!c.approve) {
         updateIntentStatus(db, intent.intent_id, "rejected", `consult: ${c.reason}`);

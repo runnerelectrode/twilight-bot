@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS decisions (
   metrics_json  TEXT NOT NULL
 );
 
+-- Per-intent high-water mark for the Phase-2 tiered ratchet (Senpi-inspired).
+-- The DSL evaluator updates this each tick, the locked floor is derived from it.
+CREATE TABLE IF NOT EXISTS intent_hwm (
+  intent_id        TEXT PRIMARY KEY,
+  high_water_pct   REAL NOT NULL,
+  updated_at       INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS consults (
   consult_id   TEXT PRIMARY KEY,
   intent_id    TEXT NOT NULL,

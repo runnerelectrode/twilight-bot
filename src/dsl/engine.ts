@@ -101,7 +101,13 @@ export function compile(expr: string): (env: Record<string, unknown>) => boolean
 export interface ExitRule { if: string; do: string }
 
 export interface DslMetrics {
-  pnl: { unrealized_pct: number };
+  pnl: {
+    unrealized_pct: number;
+    /** All-time-high unrealized_pct seen for this position. */
+    high_water_pct?: number;
+    /** Locked floor derived from HWM via the tier ladder; exit if pnl drops below this. */
+    locked_floor_pct?: number;
+  };
   funding_rates: {
     twilight: { rate: number };
     binance:  { rate: number };
@@ -109,6 +115,40 @@ export interface DslMetrics {
   };
   pool: { skew_pct: number };
   time_in_position_hours: number;
+}
+
+/**
+ * Senpi-inspired Phase-2 tiered profit ratchet.
+ *
+ * As HWM crosses each tier, raise the locked floor to lock that fraction of
+ * the gain. A flat take-profit at +50% would either stop early or give
+ * everything back on a reversal; this ladder captures more of the upside
+ * by ratcheting per tier and never moving the floor down.
+ *
+ * Tiers from Scorpion v4.x (HWM% → locked floor%):
+ *   +5  → +1.25  (lock 25% of gain)
+ *   +10 → +4.50  (lock 45%)
+ *   +15 → +9.75  (lock 65%)
+ *   +20 → +16.00 (lock 80%)
+ *   +30 → +27.00 (lock 90%)
+ *   +50 → +47.00 (lock 94%)
+ */
+const RATCHET_TIERS: Array<{ hwmAtLeast: number; lockFraction: number }> = [
+  { hwmAtLeast: 0.50, lockFraction: 0.94 },
+  { hwmAtLeast: 0.30, lockFraction: 0.90 },
+  { hwmAtLeast: 0.20, lockFraction: 0.80 },
+  { hwmAtLeast: 0.15, lockFraction: 0.65 },
+  { hwmAtLeast: 0.10, lockFraction: 0.45 },
+  { hwmAtLeast: 0.05, lockFraction: 0.25 },
+];
+
+/** Given the all-time-high pnl_pct seen so far, return the locked floor. */
+export function lockedFloorForHwm(hwmPct: number): number {
+  if (hwmPct <= 0) return -Infinity;
+  for (const tier of RATCHET_TIERS) {
+    if (hwmPct >= tier.hwmAtLeast) return hwmPct * tier.lockFraction;
+  }
+  return -Infinity;  // below the lowest tier — no lock yet
 }
 
 export interface DslDecision { fired: boolean; rule?: ExitRule; action?: string }

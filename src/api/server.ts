@@ -182,7 +182,9 @@ async function route(
       const market = await d.strategyApi.market().catch(() => ({}));
       const c = await d.consult.ask({
         intent, midPrice: mid, impact: impact.details ?? null,
-        market, recentDecisions: d.consult.recent(5),
+        market,
+        recentDecisions: d.consult.recent(5),
+        recentTrades: d.consult.recentTrades(10),
       });
       if (!c.approve) return send(res, 400, { error: "rejected", reason: `consult: ${c.reason}`, layer: "consult", confidence: c.confidence });
     }
