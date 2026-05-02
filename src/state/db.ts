@@ -79,6 +79,18 @@ CREATE TABLE IF NOT EXISTS decisions (
   fired         INTEGER NOT NULL,
   metrics_json  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS consults (
+  consult_id   TEXT PRIMARY KEY,
+  intent_id    TEXT NOT NULL,
+  ts           INTEGER NOT NULL,
+  approve      INTEGER NOT NULL,
+  reason       TEXT,
+  confidence   TEXT,
+  raw_response TEXT,
+  error        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_consults_intent ON consults(intent_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_position ON decisions(position_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS intents_fts USING fts5(

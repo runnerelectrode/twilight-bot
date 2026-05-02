@@ -9,6 +9,7 @@ import type { Guards } from "../safety/guards.js";
 import type { ExecRouter } from "../exec/router.js";
 import type { IntentLike } from "../exec/types.js";
 import type { ImpactChecker } from "../safety/impactCheck.js";
+import type { ClaudeConsult } from "../safety/claudeConsult.js";
 import { randomUUID } from "node:crypto";
 
 export interface ApiDeps {
@@ -16,6 +17,7 @@ export interface ApiDeps {
   strategyApi: StrategyApi;
   guards: Guards;
   impactChecker: ImpactChecker;
+  consult: ClaudeConsult;
   exec: ExecRouter;
   fetchPositions(): Promise<unknown[]>;
   midPrice(): Promise<number>;
@@ -176,6 +178,13 @@ async function route(
     if (live) {
       const impact = await d.impactChecker.check(intent, mid);
       if (!impact.ok) return send(res, 400, { error: "rejected", reason: impact.reason, layer: "impact", details: impact.details });
+      // Claude consultation gate — third safety layer before exec.
+      const market = await d.strategyApi.market().catch(() => ({}));
+      const c = await d.consult.ask({
+        intent, midPrice: mid, impact: impact.details ?? null,
+        market, recentDecisions: d.consult.recent(5),
+      });
+      if (!c.approve) return send(res, 400, { error: "rejected", reason: `consult: ${c.reason}`, layer: "consult", confidence: c.confidence });
     }
 
     d.db.prepare(

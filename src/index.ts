@@ -16,6 +16,7 @@ import type { IntentLike } from "./exec/types.js";
 import { PositionTracker } from "./feeds/positionTracker.js";
 import { evaluate, type ExitRule, type DslMetrics } from "./dsl/engine.js";
 import { ImpactChecker } from "./safety/impactCheck.js";
+import { ClaudeConsult } from "./safety/claudeConsult.js";
 
 interface BootEnv {
   paper: boolean;
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
   const exec = new ExecRouter({ db, twilight, binance, bybit, midPrice });
   const positionTracker = new PositionTracker(twilight, binance, bybit);
   const impactChecker = new ImpactChecker(env.strategyApiBase, env.strategyApiKey);
+  const consult = new ClaudeConsult(db);
 
   const fetchPositions = async (): Promise<unknown[]> => positionTracker.all();
 
@@ -253,6 +255,19 @@ async function main(): Promise<void> {
       log.warn("intent.rejected", { intent_id: intent.intent_id, reason: impact.reason, layer: "impact" });
       return { intent_id: intent.intent_id, status: "rejected" };
     }
+    // Claude consultation gate (auto-rejects on any error per policy).
+    if (!env.paper) {
+      const market = await strategyApi.market().catch(() => ({}));
+      const c = await consult.ask({
+        intent, midPrice: mid, impact: impact.details ?? null,
+        market, recentDecisions: consult.recent(5),
+      });
+      if (!c.approve) {
+        updateIntentStatus(db, intent.intent_id, "rejected", `consult: ${c.reason}`);
+        log.warn("intent.rejected", { intent_id: intent.intent_id, reason: c.reason, layer: "consult" });
+        return { intent_id: intent.intent_id, status: "rejected" };
+      }
+    }
     updateIntentStatus(db, intent.intent_id, "approved");
     const result = await exec.fanOut(intent);
     updateIntentStatus(db, intent.intent_id, result.status);
@@ -268,7 +283,7 @@ async function main(): Promise<void> {
   const scheduler = new Scheduler({ db, host, strategyApi, fetchPositions, fetchWallet: async () => ({}), onIntent });
 
   startApi({
-    db, strategyApi, guards, exec, impactChecker,
+    db, strategyApi, guards, exec, impactChecker, consult,
     fetchPositions, midPrice, cexBalances,
     bootEnv: { paper: env.paper, liveConfirmed: env.liveConfirmed, dataDir: env.dataDir },
     bindPublic: env.bindPublic,

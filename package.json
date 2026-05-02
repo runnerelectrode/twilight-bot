@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
     "better-sqlite3": "^11.3.0",
     "ccxt": "^4.4.30",
     "yaml": "^2.6.0"
