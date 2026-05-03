@@ -42,7 +42,7 @@ function readEnv(): BootEnv {
     apiPort: parseInt(process.env.API_PORT ?? "8787", 10),
     dataDir: process.env.DATA_DIR ?? "./data",
     skillsDir: process.env.SKILLS_DIR ?? join(process.cwd(), "skills"),
-    strategyApiBase: process.env.STRATEGY_API_BASE ?? "http://134.199.214.129:3000",
+    strategyApiBase: process.env.STRATEGY_API_BASE ?? "https://strategy.lunarpunk.xyz",
     strategyApiKey: process.env.STRATEGY_API_KEY ?? "",
   };
 }

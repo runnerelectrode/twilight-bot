@@ -10,7 +10,7 @@ Build a **two-layer trading system**: a Senpi-shaped autonomous runtime that tic
 
 Concretely:
 
-1. Continuously consume the Twilight Strategy API (`http://134.199.214.129:3000`) for live, ranked trading strategies across Twilight, Binance, and Bybit.
+1. Continuously consume the Twilight Strategy API (`https://strategy.lunarpunk.xyz`) for live, ranked trading strategies across Twilight, Binance, and Bybit.
 2. Execute profitable strategies as multi-leg trades: Twilight via `relayer-cli`, Binance + Bybit via `ccxt`. Autonomous python skills issue intents on their 10s tick; Claude Code can issue intents on demand via the HTTP API.
 3. Track live positions, funding rates, and pool skew, and exit via a DSL rule engine.
 4. Expose the runtime as a small HTTP API (JSON in/out, **localhost-bound by default with no auth**; public exposure is opt-in and requires a token — see §8). Endpoints cover state queries, paper trading, position management, kill-switch, and cap controls. Live execution from the API is gated by the same two-key opt-in as the autonomous loop *plus* a per-call `confirm_live: true` field. Claude Code calls these endpoints via `WebFetch` or `Bash + curl` — no MCP layer.
@@ -574,7 +574,7 @@ Each phase ships a working, runnable, verifiable artifact. Don't start phase N+1
 
 1. ~~**CEX hedge symbol mapping (Binance)**~~ **Resolved:** Binance v1 = linear USDT-M `BTCUSDT`. Reasoning kept for cross-ref: liquidity wins over apples-to-apples PnL with Twilight; PnL reconciliation handled at intent-shape level via `contract_type: "linear"` (§5.3) and a USD↔sats conversion in `feeds/positionTracker`.
 2. **Bybit symbol.** **Resolved:** use inverse perp on Bybit in v1 (`BTCUSD`, subject to exact ccxt market id at implementation time). Binance remains a separate decision (§10.1).
-3. **Strategy API key in repo.** The key `123hEll@he` is published in two public repos already. Treat as low-secret; load from env with that as default? Or rotate to per-tenant?
+3. **Strategy API key.** Loaded from env (`STRATEGY_API_KEY`). No default in code — operator provides their own.
 4. **Mainnet wallet provisioning.** Plan assumes you already have a `relayer-cli` mainnet wallet, BTC deposit registered, and ZkOS account funded. Confirm — this is *not* automated by v1.
 5. ~~**Single concurrent slot or per-skill?**~~ **Resolved:** v1 hard rule — `pluginLoader` refuses boot if >1 skill is `enabled: true`. Lease design captured in §8 for v2. (Kept here numbered for cross-refs.)
 6. **`relayer-cli` install path in container.** The `install.sh` may put the binary at `~/.cargo/bin/relayer-cli` or `~/.local/bin/relayer-cli` depending on env. Plan is to handle both at Docker build time. If you have a known-good binary URL or pre-built tarball, point me at it — building from source in the image is slow.
@@ -610,7 +610,7 @@ Each phase ships a working, runnable, verifiable artifact. Don't start phase N+1
 - `https://github.com/Senpi-ai/senpi-skills` — runtime shape we're cloning.
 - `https://github.com/Senpi-ai/senpi-hyperclaw-railway-template` — Railway packaging shape (deferred to v2).
 - `https://github.com/twilight-project/nyks-wallet/blob/v0.1.2-relayer-cli/docs/agent-skill-relayer-cli.md` — relayer-cli reference.
-- Strategy API: `http://134.199.214.129:3000` — auth header `x-api-key: 123hEll@he`.
+- Strategy API: `https://strategy.lunarpunk.xyz` — auth header `x-api-key: $STRATEGY_API_KEY`.
 
 ---
 
