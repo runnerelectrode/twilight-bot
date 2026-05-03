@@ -85,6 +85,7 @@ export class ClaudeConsult {
           systemPrompt: SYSTEM_PROMPT,
           maxTurns: 1,
           abortController: ac,
+          ...(process.env.CLAUDE_CLI_PATH ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CLI_PATH } : {}),
         },
       });
       for await (const msg of result as AsyncIterable<unknown>) {

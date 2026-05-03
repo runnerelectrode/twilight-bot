@@ -10,6 +10,7 @@ import type { ExecRouter } from "../exec/router.js";
 import type { IntentLike } from "../exec/types.js";
 import type { ImpactChecker } from "../safety/impactCheck.js";
 import type { ClaudeConsult } from "../safety/claudeConsult.js";
+import { handleChat, type ChatTurn } from "./chat.js";
 import { randomUUID } from "node:crypto";
 
 export interface ApiDeps {
@@ -238,6 +239,19 @@ async function route(
     if (body.on) writeFileSync(path, String(Date.now()));
     else if (existsSync(path)) unlinkSync(path);
     return send(res, 200, { on: !!body.on });
+  }
+
+  if (method === "POST" && p === "/chat") {
+    const body = await readJson(req) as { message?: string; history?: ChatTurn[] };
+    const result = await handleChat({
+      db: d.db,
+      strategyApi: d.strategyApi,
+      fetchPositions: d.fetchPositions,
+      bootEnv: { paper: d.bootEnv.paper, dataDir: d.bootEnv.dataDir },
+      startTs: d.startTs,
+      lastTickByName: d.lastTickByName,
+    }, body);
+    return send(res, result.error ? 502 : 200, result);
   }
 
   if (method === "GET" && p === "/caps") {

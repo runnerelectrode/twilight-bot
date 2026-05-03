@@ -1,0 +1,41 @@
+# Private bot monitor — IP-only, no DNS, Bearer-token gated.
+# Access: http://<your-server-ip>:9090/  (token entered once via dashboard prompt)
+#
+# Why Bearer not Basic auth? Safari does not include cached basic-auth
+# credentials with fetch() / XHR — only with page navigation & <img>/<script>
+# loads. That made the dashboard's polling silently fail. Bearer header
+# is set explicitly by the dashboard JS, which Safari handles correctly.
+server {
+    listen 9090;
+    listen [::]:9090;
+    server_name _;
+
+    root /var/www/bot-monitor;
+    index index.html;
+
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    add_header Cache-Control "no-store" always;
+
+    # Static dashboard is served unauthenticated. The HTML/JS contains no
+    # secrets; the bot endpoints are still gated. Anyone hitting / sees
+    # only the shell + a "monitor password" prompt.
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # Bot api proxy — requires the dashboard's Bearer token from the
+    # operator's prompt. nginx swaps that for the bot's real bearer.
+    location /bot/ {
+        if ($http_authorization != "Bearer <DASHBOARD_BEARER_TOKEN>") {
+            return 401;
+        }
+        proxy_pass http://127.0.0.1:8787/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization "Bearer <BOT_INTERNAL_API_TOKEN>";
+        proxy_read_timeout 60s;
+    }
+}
