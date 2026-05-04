@@ -63,7 +63,7 @@ export class ExecRouter {
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e);
         log.error("exec.leg_failed", { intent_id: intent.intent_id, leg_index: i, venue: leg.venue, error });
-        const unwind = await this.unwind(fills, mid);
+        const unwind = await this.unwind(intent.legs.slice(0, fills.length), fills, mid);
         return { status: "failed", fills, stops, failed_leg_index: i, unwind, error };
       }
     }
@@ -108,21 +108,29 @@ export class ExecRouter {
     return cex.closeReduceOnly(leg.symbol, leg.side, leg.contract_type, leg.size_usd, mid);
   }
 
-  private async unwind(fills: FillResult[], mid: number): Promise<FillResult[]> {
+  /** Unwind successful fills when a later leg fails. legs[i] corresponds to fills[i]
+   *  by construction in fanOut(). Walks in reverse so later legs close first.
+   *
+   *  Critically, the original leg metadata is required: account_index for twilight
+   *  (defaulting to 0 closes the WRONG account when the fill happened on a different
+   *  index — this is exactly what stranded the open short last time), and
+   *  symbol/contract_type/size_usd for cex legs (hardcoded BTCUSDT/linear was wrong
+   *  for any non-default symbol or for bybit inverse). */
+  private async unwind(legs: Leg[], fills: FillResult[], mid: number): Promise<FillResult[]> {
     const out: FillResult[] = [];
-    for (const f of fills.slice().reverse()) {
+    for (let i = fills.length - 1; i >= 0; i--) {
+      const f = fills[i];
+      const leg = legs[i];
+      if (!leg) continue;
       try {
-        if (f.venue === "twilight") {
-          out.push(await this.deps.twilight.close(0));
+        if (leg.venue === "twilight") {
+          out.push(await this.deps.twilight.close(leg.account_index ?? 0));
         } else {
-          // closeReduceOnly needs the leg's contract metadata; fall back to assumed defaults.
-          const cex = f.venue === "binance" ? this.deps.binance : this.deps.bybit;
-          const symbol = f.venue === "binance" ? "BTCUSDT" : "BTCUSD";
-          const ct: "linear" | "inverse" = f.venue === "binance" ? "linear" : "inverse";
-          out.push(await cex.closeReduceOnly(symbol, f.side, ct, f.size, mid));
+          const cex = leg.venue === "binance" ? this.deps.binance : this.deps.bybit;
+          out.push(await cex.closeReduceOnly(leg.symbol, leg.side, leg.contract_type, leg.size_usd, mid));
         }
       } catch (e) {
-        log.error("exec.unwind_leg_failed", { venue: f.venue, err: String(e) });
+        log.error("exec.unwind_leg_failed", { venue: f.venue, leg_idx: i, err: String(e) });
       }
     }
     return out;

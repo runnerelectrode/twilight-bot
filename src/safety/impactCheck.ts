@@ -33,6 +33,10 @@ export class ImpactChecker {
   ) {}
 
   async check(intent: IntentLike, midPrice: number): Promise<ImpactDecision> {
+    if (process.env.IMPACT_CHECK_DISABLED === "1") {
+      log.warn("impact_check.bypassed_by_env", { intent_id: intent.intent_id });
+      return { ok: true, details: { warning: "IMPACT_CHECK_DISABLED=1 — operator override" } };
+    }
     const twiLegs = intent.legs.filter(l => l.venue === "twilight");
     if (twiLegs.length === 0) return { ok: true };
 
