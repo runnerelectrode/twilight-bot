@@ -105,7 +105,13 @@ export class ExecRouter {
   private async closeLeg(leg: Leg, mid: number, fallback_account_index: number): Promise<FillResult> {
     if (leg.venue === "twilight") return this.deps.twilight.close(leg.account_index ?? fallback_account_index);
     const cex = leg.venue === "binance" ? this.deps.binance : this.deps.bybit;
-    return cex.closeReduceOnly(leg.symbol, leg.side, leg.contract_type, leg.size_usd, mid);
+    // Operator-driven close — use the maker-first FEE_OPTIMIZED_LIMIT path
+    // (saves ~5bps × 2 legs vs raw market reduce, with a 60s timeout +
+    // market-fallback). Stops attached at the venue still fire instantly via
+    // the venue's own engine if speed is genuinely critical. The tiny inverse
+    // BTC/USD orderbook on Bybit slips badly with bare market reduce-only
+    // (saw ~$674 of slippage on a $12 close in the live test).
+    return cex.closeOptimized(leg.symbol, leg.side, leg.contract_type, leg.size_usd, mid);
   }
 
   /** Unwind successful fills when a later leg fails. legs[i] corresponds to fills[i]
@@ -127,6 +133,10 @@ export class ExecRouter {
           out.push(await this.deps.twilight.close(leg.account_index ?? 0));
         } else {
           const cex = leg.venue === "binance" ? this.deps.binance : this.deps.bybit;
+          // Unwind is "another leg failed, please undo" — speed > price (don't
+          // want to sit in a 60s polling loop while the market moves against
+          // the half-filled hedge). Stays on closeReduceOnly here. Stops are
+          // also cancelled inside it to avoid leaving orphan triggers.
           out.push(await cex.closeReduceOnly(leg.symbol, leg.side, leg.contract_type, leg.size_usd, mid));
         }
       } catch (e) {

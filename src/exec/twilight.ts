@@ -139,4 +139,38 @@ export class TwilightExec {
     }
     return JSON.parse(r.stdout);
   }
+
+  /** Per-account ZkOS balances. The skill needs these to size trades because
+   *  relayer-cli v0.1.2 `open-trade` has NO --size flag — it sizes the
+   *  position from the chosen account's full balance × leverage. So the
+   *  effective notional is determined by which account we pick, not by any
+   *  size argument we pass. Skills that don't account for this will compute
+   *  wrong hedge ratios (saw a 10× mismatch in the first live test). */
+  async walletAccounts(): Promise<Array<{ index: number; balance_sats: number; on_chain: boolean; tx_type?: string }>> {
+    if (this.env.paper) return [];
+    if (!this.env.walletId || !this.env.password) return [];
+    const r = await runRelayer([
+      "wallet", "accounts",
+      "--wallet-id", this.env.walletId,
+      "--password",  this.env.password,
+      "--json",
+    ]);
+    if (r.code !== 0) {
+      log.warn("twilight.walletAccounts.failed", { stderr: r.stderr });
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(r.stdout) as { accounts?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>;
+      const list = Array.isArray(parsed) ? parsed : (parsed.accounts ?? []);
+      return list.map(a => ({
+        index: Number(a["index"] ?? a["account_index"] ?? 0),
+        balance_sats: Number(a["balance"] ?? a["balance_sats"] ?? 0),
+        on_chain: Boolean(a["on_chain"] ?? a["onChain"] ?? false),
+        tx_type: a["tx_type"] as string | undefined,
+      }));
+    } catch (e) {
+      log.warn("twilight.walletAccounts.parse_failed", { err: String(e) });
+      return [];
+    }
+  }
 }

@@ -115,10 +115,35 @@ export class CexExec {
     }
   }
 
+  /** Cancel any pending conditional / stop orders for `symbol` before close.
+   *  Without this, the stop attached at open() lives on after the position
+   *  closes, and if the trigger price is later hit it fires as a NEW position
+   *  (Bybit/Binance accept the trigger even with no open position to reduce).
+   *  Soft-fails: best-effort cancel, never blocks the actual close. */
+  private async cancelPendingStops(symbol: string): Promise<void> {
+    if (this.env.paper) return;
+    try {
+      if (this.venue === "bybit") {
+        // ccxt cancelAllOrders doesn't always touch Bybit's stop / conditional
+        // orders. Use the v5 endpoint with orderFilter=StopOrder explicitly.
+        const market = this.client.market(symbol);
+        const cat = market.linear ? "linear" : "inverse";
+        await (this.client as unknown as { privatePostV5OrderCancelAll: (p: unknown) => Promise<unknown> })
+          .privatePostV5OrderCancelAll({ category: cat, symbol: market.id, orderFilter: "StopOrder" });
+      } else {
+        // Binance: cancelAllOrders covers the open + STOP_MARKET attached at open
+        await this.client.cancelAllOrders(symbol);
+      }
+    } catch (e) {
+      log.warn("cex.cancel_pending_stops_failed", { venue: this.venue, symbol, err: String(e) });
+    }
+  }
+
   async closeReduceOnly(symbol: string, side: "long" | "short", contract_type: "linear" | "inverse", size_usd: number, mid_price: number): Promise<FillResult> {
     if (this.env.paper) {
       return { venue: this.venue, side, size: size_usd, price: mid_price, fee: 0, raw: { paper: true, close: true } };
     }
+    await this.cancelPendingStops(symbol);
     const ccxtSide = side === "long" ? "sell" : "buy";
     const amount = contract_type === "inverse"
       ? Math.max(1, Math.round(size_usd))
@@ -144,6 +169,7 @@ export class CexExec {
     if (this.env.paper) {
       return { venue: this.venue, side, size: size_usd, price: mid_price, fee: 0, raw: { paper: true, close: true, mode: "optimized" } };
     }
+    await this.cancelPendingStops(symbol);
     const ccxtSide = side === "long" ? "sell" : "buy";
     const amount = contract_type === "inverse"
       ? Math.max(1, Math.round(size_usd))

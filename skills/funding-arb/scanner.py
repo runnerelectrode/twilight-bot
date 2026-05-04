@@ -24,10 +24,13 @@ from skill_sdk.dsl import standard_funding_arb_exits
 
 SKILL = "funding-arb"
 MIN_APY        = float(os.environ.get("FUNDING_ARB_MIN_APY", "50"))
-NOTIONAL_USD   = float(os.environ.get("FUNDING_ARB_NOTIONAL_USD", "100"))
 LEVERAGE       = int(os.environ.get("FUNDING_ARB_LEVERAGE", "5"))
 STOP_PCT_ENV   = float(os.environ.get("FUNDING_ARB_STOP_PCT", "0.05"))
 ACCOUNT_INDEX  = int(os.environ.get("FUNDING_ARB_TWILIGHT_ACCOUNT_INDEX", "0"))
+# Cap on effective notional. The actual trade size is determined by the
+# chosen account's balance × leverage (see size derivation in main()).
+# We refuse to open if that would exceed this cap.
+NOTIONAL_CAP_USD = float(os.environ.get("FUNDING_ARB_MAX_NOTIONAL_USD", "200"))
 # Per-venue minimum notional (USD). Binance Futures BTCUSDT requires
 # ≥ 0.001 BTC per order — at $80k that's $80; at $50k it's $50, so we
 # leave it overrideable via env. Bybit inverse uses 1-contract = $1 min.
@@ -109,8 +112,34 @@ def main():
         if chosen is None:
             write_noop(tid, f"no {twi_side}-twi strategy >= {MIN_APY}% apy"); continue
 
-        bin_usd, byb_usd = hedge_split(bin_favor, byb_favor, NOTIONAL_USD)
-        size_sats = int(NOTIONAL_USD / max(twi_price, 1) * SAT_PER_BTC)
+        # Determine TRUE position size from the chosen account's balance.
+        # relayer-cli v0.1.2 has no --size flag — open-trade uses the full
+        # account balance × leverage as position notional. Computing hedges
+        # from any other "intended" size produces a mismatched hedge ratio
+        # (the v0.1 funding-arb scanner had a 10× hedge mismatch caught
+        # only in live testing).
+        twi_accounts = ((tick.get("wallet") or {}).get("twilight") or {}).get("accounts") or []
+        acct = next((a for a in twi_accounts if a.get("index") == ACCOUNT_INDEX), None)
+        if not acct or not acct.get("balance_sats"):
+            write_noop(tid, f"twilight account {ACCOUNT_INDEX} empty or missing in wallet snapshot"); continue
+        # Burned accounts (already used for an order) can't be re-used until
+        # transferred. Skip silently — operator must rotate or pick a fresh idx.
+        if str(acct.get("tx_type") or "").upper() == "ORDERTX":
+            write_noop(tid, f"twilight account {ACCOUNT_INDEX} burned (ORDERTX) — needs zkaccount transfer"); continue
+
+        margin_btc = acct["balance_sats"] / SAT_PER_BTC
+        margin_usd = margin_btc * twi_price
+        notional_usd = margin_usd * LEVERAGE
+        if notional_usd > NOTIONAL_CAP_USD:
+            write_noop(tid, f"notional ${notional_usd:.0f} on acct {ACCOUNT_INDEX} > cap ${NOTIONAL_CAP_USD:.0f} — pick smaller acct"); continue
+        if notional_usd < 1:
+            write_noop(tid, f"notional ${notional_usd:.2f} too small to trade"); continue
+
+        bin_usd, byb_usd = hedge_split(bin_favor, byb_favor, notional_usd)
+        # size_sats is documented as "intent's intended size". relayer-cli
+        # ignores it for open, but it lets the cex hedge compute a matching
+        # USD notional and gives the operator a value to inspect.
+        size_sats = int(notional_usd / max(twi_price, 1) * SAT_PER_BTC)
         stop = safe_stop_pct(LEVERAGE)
 
         # Per-venue minimum-notional preflight. If the split would put either
@@ -121,21 +150,21 @@ def main():
         # router was left holding a directional twilight short).
         bin_ok = bin_usd >= BIN_MIN_USD
         byb_ok = byb_usd >= BYB_MIN_USD
-        bin_solo_ok = NOTIONAL_USD >= BIN_MIN_USD   # could route 100% to binance
-        byb_solo_ok = NOTIONAL_USD >= BYB_MIN_USD   # could route 100% to bybit
+        bin_solo_ok = notional_usd >= BIN_MIN_USD   # could route 100% to binance
+        byb_solo_ok = notional_usd >= BYB_MIN_USD   # could route 100% to bybit
 
         if bin_ok and byb_ok:
             bin_size, byb_size = bin_usd, byb_usd
         elif byb_solo_ok and not bin_solo_ok:
-            bin_size, byb_size = 0.0, NOTIONAL_USD
+            bin_size, byb_size = 0.0, notional_usd
         elif bin_solo_ok and not byb_solo_ok:
-            bin_size, byb_size = NOTIONAL_USD, 0.0
+            bin_size, byb_size = notional_usd, 0.0
         elif bin_solo_ok and byb_solo_ok:
             # Both can hold solo. Pick the venue with the bigger funding edge.
             if bin_favor >= byb_favor:
-                bin_size, byb_size = NOTIONAL_USD, 0.0
+                bin_size, byb_size = notional_usd, 0.0
             else:
-                bin_size, byb_size = 0.0, NOTIONAL_USD
+                bin_size, byb_size = 0.0, notional_usd
         else:
             write_noop(tid,
                 f"hedge legs below venue mins (bin=${bin_usd:.2f} need≥${BIN_MIN_USD:.0f}, "

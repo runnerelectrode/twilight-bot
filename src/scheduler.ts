@@ -30,8 +30,22 @@ export interface SchedulerDeps {
   onIntent: IntentHandler;
 }
 
+/** Per-skill failure-cascade circuit breaker.
+ *  After N consecutive intent failures, pause the skill for cooldown_ms
+ *  to stop hammering the venues with the same broken intent (and to stop
+ *  the dashboard's recent-intents panel from filling with red rows).
+ *  Resets on the first successful fill. */
+interface FailureState {
+  consecutive: number;
+  pausedUntil: number;     // epoch ms; 0 means not paused
+  lastError: string;
+}
+const MAX_CONSECUTIVE_FAILURES = Number(process.env.MAX_CONSECUTIVE_INTENT_FAILURES ?? 3);
+const FAILURE_COOLDOWN_MS     = Number(process.env.INTENT_FAILURE_COOLDOWN_MS ?? 5 * 60 * 1000);
+
 export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
+  private failures = new Map<string, FailureState>();
 
   constructor(private deps: SchedulerDeps) {}
 
@@ -51,6 +65,22 @@ export class Scheduler {
   private async tickOnce(): Promise<void> {
     const skill = this.deps.host.skill.name;
     if (this.deps.host.isDisabled()) return;
+    // Circuit-breaker: if the skill has been failing consecutively, skip
+    // ticking entirely until cooldown expires. Logs a single skipped tick
+    // each interval so the operator sees why nothing is happening.
+    const fs = this.failures.get(skill);
+    if (fs && fs.pausedUntil > Date.now()) {
+      const breaker_id = this.makeId();
+      const now = Date.now();
+      insertTick(this.deps.db, { tick_id: breaker_id, skill, started_at: now });
+      finishTick(this.deps.db, breaker_id, {
+        status: "circuit_breaker_open",
+        finished_at: now,
+        latency_ms: 0,
+        error: `${fs.consecutive} consecutive failures, paused ${Math.round((fs.pausedUntil - now) / 1000)}s more — last: ${fs.lastError.slice(0, 200)}`,
+      });
+      return;
+    }
     if (this.deps.host.isInFlight()) {
       const overlap_id = this.makeId();
       const now = Date.now();
@@ -131,6 +161,24 @@ export class Scheduler {
       latency_ms: outcome.latency_ms,
       intent_id: intentResult?.intent_id ?? null,
     });
+
+    // Update circuit breaker. Reset on filled, increment on failed/rejected,
+    // ignore approved (mid-flight). Trip if streak hits the threshold.
+    const status = intentResult?.status;
+    if (status === "filled") {
+      this.failures.delete(skill);
+    } else if (status === "failed" || status === "rejected") {
+      const cur = this.failures.get(skill) ?? { consecutive: 0, pausedUntil: 0, lastError: "" };
+      cur.consecutive += 1;
+      cur.lastError = `${status} intent ${intentResult?.intent_id ?? "?"}`;
+      if (cur.consecutive >= MAX_CONSECUTIVE_FAILURES && cur.pausedUntil < Date.now()) {
+        cur.pausedUntil = Date.now() + FAILURE_COOLDOWN_MS;
+        log.warn("scheduler.circuit_breaker_tripped", {
+          skill, consecutive: cur.consecutive, cooldown_ms: FAILURE_COOLDOWN_MS,
+        });
+      }
+      this.failures.set(skill, cur);
+    }
   }
 
   private makeId(): string {

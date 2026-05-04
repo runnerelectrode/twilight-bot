@@ -202,17 +202,42 @@ async function route(
     return send(res, 200, { intent_id: intent.intent_id, ...result });
   }
 
-  if (method === "POST" && (m = p.match(/^\/positions\/([^/]+)\/close$/))) {
-    const position_id = m[1]!;
-    const pos = d.db.prepare(`SELECT * FROM positions WHERE position_id = ?`).get(position_id) as { intent_id?: string } | undefined;
-    if (!pos?.intent_id) return send(res, 404, { error: "not_found" });
+  if (method === "POST" && (m = p.match(/^\/positions\/(.+)\/close$/))) {
+    // Accept either a DB UUID (from /trades/* output) OR the synthetic id
+    // returned by /positions (e.g. "twi_9", "bybit_BTC/USD:BTC"). The
+    // dashboard reads /positions and surfaces the synthetic id; demanding the
+    // operator translate to the UUID was friction that broke the dashboard's
+    // close button. Synthetic-id lookup matches the most recent open DB
+    // position on that venue (+ account_index for twilight).
+    const raw_id = decodeURIComponent(m[1]!);
+    type DbPos = { position_id: string; intent_id: string };
+    let pos = d.db.prepare(`SELECT position_id, intent_id FROM positions WHERE position_id = ? AND closed_at IS NULL`).get(raw_id) as DbPos | undefined;
+    if (!pos && raw_id.startsWith("twi_")) {
+      const acct = parseInt(raw_id.slice(4), 10);
+      pos = d.db.prepare(
+        `SELECT p.position_id, p.intent_id FROM positions p
+         JOIN intents i ON i.intent_id = p.intent_id
+         WHERE p.venue = 'twilight' AND p.closed_at IS NULL
+           AND CAST(json_extract(i.legs_json, '$[0].account_index') AS INTEGER) = ?
+         ORDER BY p.opened_at DESC LIMIT 1`
+      ).get(acct) as DbPos | undefined;
+    }
+    if (!pos && (raw_id.startsWith("bybit_") || raw_id.startsWith("binance_"))) {
+      const venue = raw_id.startsWith("bybit_") ? "bybit" : "binance";
+      pos = d.db.prepare(
+        `SELECT position_id, intent_id FROM positions
+         WHERE venue = ? AND closed_at IS NULL
+         ORDER BY opened_at DESC LIMIT 1`
+      ).get(venue) as DbPos | undefined;
+    }
+    if (!pos?.intent_id) return send(res, 404, { error: "not_found", position_id: raw_id });
     const intent = d.db.prepare(`SELECT * FROM intents WHERE intent_id = ?`).get(pos.intent_id) as { legs_json?: string } | undefined;
     if (!intent?.legs_json) return send(res, 404, { error: "intent_not_found" });
     const legs = JSON.parse(intent.legs_json) as IntentLike["legs"];
     const fills = await d.exec.closePositionFor({ intent_id: pos.intent_id, skill: "api", legs }, 0);
     d.db.prepare(`UPDATE positions SET closed_at = ? WHERE position_id = ?`)
-        .run(Date.now(), position_id);
-    return send(res, 200, { position_id, fills });
+        .run(Date.now(), pos.position_id);
+    return send(res, 200, { position_id: pos.position_id, fills });
   }
 
   if (method === "POST" && (m = p.match(/^\/skills\/([^/]+)\/(enable|disable)$/))) {

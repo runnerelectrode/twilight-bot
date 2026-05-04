@@ -304,7 +304,18 @@ async function main(): Promise<void> {
   const host = new PythonHost(active);
   host.start();
 
-  const scheduler = new Scheduler({ db, host, strategyApi, fetchPositions, fetchWallet: async () => ({}), onIntent });
+  const fetchWallet = async (): Promise<unknown> => {
+    // Surface Twilight per-account balances so skills can compute the real
+    // trade notional (relayer-cli v0.1.2 sizes from the chosen account's
+    // full balance × leverage — there's no --size flag).
+    try {
+      const accounts = await twilight.walletAccounts();
+      return { twilight: { accounts } };
+    } catch {
+      return {};
+    }
+  };
+  const scheduler = new Scheduler({ db, host, strategyApi, fetchPositions, fetchWallet, onIntent });
 
   startApi({
     db, strategyApi, guards, exec, impactChecker, consult,
